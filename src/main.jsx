@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createClient } from '@supabase/supabase-js'
-import { CalendarDays, Plus, Share2, ChevronLeft, Check, Sparkles, Copy, RefreshCw } from 'lucide-react'
+import { CalendarDays, Plus, Share2, ChevronLeft, Check, Sparkles, Copy, RefreshCw, Users, X } from 'lucide-react'
 import './style.css'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
@@ -52,6 +52,9 @@ function App() {
   const [step, setStep] = useState('15')
   const [person, setPerson] = useState('')
   const [chosen, setChosen] = useState({})
+  const [dragEnabled, setDragEnabled] = useState(false)
+  const [inspectedSlot, setInspectedSlot] = useState(null)
+  const dragRef = useRef(null)
   const [notice, setNotice] = useState('')
 
   useEffect(() => {
@@ -59,6 +62,8 @@ function App() {
       setEventId(getEventId())
       setEvent(null)
       setChosen({})
+      setInspectedSlot(null)
+      dragRef.current = null
     }
     window.addEventListener('popstate', sync)
     return () => window.removeEventListener('popstate', sync)
@@ -129,6 +134,8 @@ function App() {
     setCreating(false)
     setEvent(null)
     setNotice('')
+    setInspectedSlot(null)
+    dragRef.current = null
   }
 
   async function create(e) {
@@ -149,6 +156,7 @@ function App() {
       // Ne proposer le lien qu'une fois le sondage confirmé dans Supabase.
       window.history.pushState({}, '', linkFor(ev.id))
       setChosen({})
+      setInspectedSlot(null)
       setPerson('')
       setCreating(false)
       setEventId(ev.id)
@@ -176,7 +184,66 @@ function App() {
     return `${dateLabel(d)} à ${t}`
   }).join(' · ')
 
-  function toggle(k) { setChosen(p => ({ ...p, [k]: !p[k] })) }
+  // Un clic en mode normal modifie ma sélection ET montre les participants disponibles.
+  function inspectAndToggle(k) {
+    setChosen(p => ({ ...p, [k]: !p[k] }))
+    setInspectedSlot(k)
+  }
+
+  // Le tracé sélectionne (ou désélectionne) toutes les cases traversées.
+  // Le premier créneau détermine le sens, comme dans When2Meet.
+  function onGridPointerDown(e) {
+    if (!dragEnabled || (e.pointerType === 'mouse' && e.button !== 0)) return
+    const cell = e.target.closest('[data-slot]')
+    if (!cell || !e.currentTarget.contains(cell)) return
+    const key = cell.dataset.slot
+    const value = !Boolean(chosen[key])
+    dragRef.current = {
+      pointerId: e.pointerId, value, visited: new Set([key]),
+      last: { x: e.clientX, y: e.clientY }
+    }
+    setChosen(p => ({ ...p, [key]: value }))
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    e.preventDefault()
+  }
+
+  function onGridPointerMove(e) {
+    const drag = dragRef.current
+    if (!dragEnabled || !drag || drag.pointerId !== e.pointerId) return
+    const grid = e.currentTarget
+    const x0 = drag.last.x, y0 = drag.last.y
+    const dx = e.clientX - x0, dy = e.clientY - y0
+    // Échantillonnage intermédiaire : évite de sauter des cases lors d'un mouvement rapide.
+    const steps = Math.max(1, Math.min(100, Math.ceil(Math.hypot(dx, dy) / 12)))
+    const added = []
+    for (let i = 1; i <= steps; i++) {
+      const el = document.elementFromPoint(x0 + dx * i / steps, y0 + dy * i / steps)
+      const cell = el?.closest?.('[data-slot]')
+      if (!cell || !grid.contains(cell)) continue
+      const key = cell.dataset.slot
+      if (!drag.visited.has(key)) {
+        drag.visited.add(key)
+        added.push(key)
+      }
+    }
+    drag.last = { x: e.clientX, y: e.clientY }
+    if (added.length) setChosen(p => {
+      const next = { ...p }
+      added.forEach(key => { next[key] = drag.value })
+      return next
+    })
+  }
+
+  function onGridPointerUp(e) {
+    if (dragRef.current?.pointerId !== e.pointerId) return
+    onGridPointerMove(e)
+    dragRef.current = null
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+  }
+
+  const slotParticipants = inspectedSlot
+    ? (event?.participants || []).filter(p => Array.isArray(p.slots) && p.slots.includes(inspectedSlot))
+    : []
 
   async function submit() {
     if (!db || !event) return setNotice('Ce sondage n’est pas connecté à Supabase.')
@@ -244,11 +311,60 @@ function App() {
       <button className="back" onClick={home}><ChevronLeft size={17} /> Accueil</button>
       <div className="eventtitle"><div><div className="eyebrow">SONDAGE DE DISPONIBILITÉS</div><h1>{event.title}</h1><p>{event.dates.length} jours · Créneaux de {event.step} minutes</p></div><button className="share" onClick={share}><Share2 size={17} /> Partager</button></div>
       <section className="best"><Sparkles /><div><small>MEILLEUR CRÉNEAU ACTUEL</small><b>{max ? fmtBest : 'En attente de réponses'}</b><span>{max ? `${max} personne(s) disponible(s)` : 'Les réponses apparaîtront ici.'}</span></div></section>
-      <section className="panel"><h2>Mes disponibilités</h2><p className="hint">Saisis ton prénom puis touche les cases où tu es disponible.</p><label>Ton prénom<input value={person} onChange={e => setPerson(e.target.value)} placeholder="Ex. : Camille" /></label>
-        <div className="gridwrap"><div className="grid" style={{ '--days': event.dates.length }}><div className="timehead">Heure</div>{event.dates.map(d => <div className="day" key={d}>{dateLabel(d)}</div>)}
-          {times.map(t => <React.Fragment key={t}><div className="time">{t}</div>{event.dates.map(d => { const k = keyFor(d, t); return <button key={k} className={`cell ${chosen[k] ? 'mine' : ''} ${counts[k] ? 'voted' : ''}`} onClick={() => toggle(k)} aria-label={`${d} ${t}`}>{counts[k] || ''}</button> })}</React.Fragment>)}
-        </div></div>
-        <div className="legend"><span><i /> Ta sélection</span><span><i className="other" /> Déjà sélectionné par quelqu'un</span></div>
+      <section className="panel"><h2>Mes disponibilités</h2>
+        <p className="hint">Saisis ton prénom, sélectionne les créneaux qui te conviennent, puis enregistre ta réponse.</p>
+        <label>Ton prénom<input value={person} onChange={e => setPerson(e.target.value)} placeholder="Ex. : Camille" /></label>
+        <div className="mode-row">
+          <label className="mode-toggle">
+            <input type="checkbox" role="switch" checked={dragEnabled} onChange={e => {
+              setDragEnabled(e.target.checked)
+              dragRef.current = null
+              if (e.target.checked) setInspectedSlot(null)
+            }} />
+            <span className="mode-switch" aria-hidden="true" />
+            <span className="mode-copy"><b>Sélection par glissement</b><small>Avec le doigt ou la souris</small></span>
+          </label>
+          <span className={`mode-status ${dragEnabled ? 'on' : ''}`}>{dragEnabled ? 'Activé' : 'Désactivé'}</span>
+        </div>
+        <p className="mode-help">{dragEnabled
+          ? 'Fais glisser le doigt ou maintiens le clic de la souris pour cocher plusieurs cases. Un nouveau glissement sur une case cochée permet de décocher. Désactive ce mode pour voir les noms ou faire défiler la grille au doigt.'
+          : 'Touche une case pour la cocher ou la décocher et afficher les personnes déjà disponibles à cet horaire. Tu peux faire défiler la grille.'}</p>
+        <div className={`gridwrap ${dragEnabled ? 'drag-active' : ''}`}>
+          <div className="grid" style={{ '--days': event.dates.length }}
+            onPointerDown={onGridPointerDown}
+            onPointerMove={onGridPointerMove}
+            onPointerUp={onGridPointerUp}
+            onPointerCancel={() => { dragRef.current = null }}
+            onLostPointerCapture={() => { dragRef.current = null }}>
+            <div className="timehead">Heure</div>{event.dates.map(d => <div className="day" key={d}>{dateLabel(d)}</div>)}
+            {times.map(t => <React.Fragment key={t}><div className="time">{t}</div>{event.dates.map(d => {
+              const k = keyFor(d, t)
+              return <button key={k} type="button" data-slot={k}
+                className={`cell ${chosen[k] ? 'mine' : ''} ${counts[k] ? 'voted' : ''} ${inspectedSlot === k && !dragEnabled ? 'inspected' : ''}`}
+                onClick={e => {
+                  if (!dragEnabled) inspectAndToggle(k)
+                  else if (e.detail === 0) setChosen(p => ({ ...p, [k]: !p[k] })) // clavier
+                }}
+                aria-pressed={Boolean(chosen[k])}
+                aria-label={`${dateLabel(d)} à ${t} : ${counts[k] || 0} personne(s) disponible(s)${chosen[k] ? ', sélectionné' : ''}`}>
+                {counts[k] || ''}
+              </button>
+            })}</React.Fragment>)}
+          </div>
+        </div>
+        {!dragEnabled && inspectedSlot && <aside className="slot-details" aria-live="polite">
+          <div className="slot-details-top">
+            <div><span className="slot-eyebrow"><Users size={15} /> Disponibles pour ce créneau</span>
+              <h3>{dateLabel(inspectedSlot.split('|')[0])} à {inspectedSlot.split('|')[1]}</h3></div>
+            <button type="button" className="close-details" onClick={() => setInspectedSlot(null)} aria-label="Fermer les détails"><X size={18} /></button>
+          </div>
+          <p className="slot-count">{slotParticipants.length} {slotParticipants.length > 1 ? 'participants disponibles' : 'participant disponible'}</p>
+          {slotParticipants.length ? <div className="slot-names">{slotParticipants.map((p,i) =>
+            <span className="slot-name" key={`${p.id || p.name}-${i}`}>{p.name}</span>)}</div>
+            : <p className="slot-empty">Personne n'a encore enregistré sa disponibilité pour ce créneau.</p>}
+          <p className="slot-explain">Ta propre sélection apparaît en vert dans la grille ; elle ne sera visible par les autres qu'après l'enregistrement.</p>
+        </aside>}
+        <div className="legend"><span><i /> Ta sélection</span><span><i className="other" /> Déjà sélectionné par quelqu'un</span><span>Les chiffres indiquent le nombre de personnes</span></div>
         <button className="primary full" disabled={saving} onClick={submit}><Check size={17} /> {saving ? 'Enregistrement…' : 'Enregistrer mes disponibilités'}</button>
       </section>
       <section className="panel"><h2>Disponibilités du groupe ({(event.participants || []).length})</h2>{(event.participants || []).length === 0 ? <p className="hint">Pas encore de réponse. Partage le lien pour inviter les participants.</p> : event.participants.map(p => <div className="participant" key={p.id}><b>{p.name}</b><span>{p.slots.length} créneaux</span></div>)}</section>
