@@ -16,8 +16,8 @@ export default defineConfig({
         start_url: '/QuandEstLibre/',
         scope: '/QuandEstLibre/',
         display: 'standalone',
-        theme_color: '#176b50',
-        background_color: '#f5f8f6',
+        theme_color: '#4C0297',
+        background_color: '#FFFCF4',
         icons: [
           { src: '/QuandEstLibre/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }
         ]
