@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createClient } from '@supabase/supabase-js'
-import { CalendarDays, Plus, Share2, ChevronLeft, Check, Sparkles, Copy, RefreshCw, Users, X, MousePointer2, PencilLine, Eye } from 'lucide-react'
+import { CalendarDays, Plus, Share2, ChevronLeft, Check, Sparkles, Copy, RefreshCw, Users, X, MousePointer2, PencilLine, Eye, Trash2, ArrowUpRight } from 'lucide-react'
 import './style.css'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
@@ -36,6 +36,19 @@ const slotsFor = (start, end, step) => {
 }
 const keyFor = (d, t) => `${d}|${t}`
 
+// Historique propre à ce navigateur : aucun compte et aucune table Supabase supplémentaire.
+const HISTORY_KEY = 'quandestlibre_history_v1'
+const readHistory = () => {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(HISTORY_KEY) || '[]')
+    if (!Array.isArray(saved)) return []
+    return saved.filter(item => item && typeof item.id === 'string' && item.id.length < 128 && typeof item.title === 'string')
+      .slice(0, 100)
+  } catch {
+    return []
+  }
+}
+
 function App() {
   const [eventId, setEventId] = useState(getEventId)
   const [event, setEvent] = useState(null)
@@ -49,7 +62,7 @@ function App() {
   const [dayCount, setDayCount] = useState('7')
   const [startHour, setStartHour] = useState('08')
   const [endHour, setEndHour] = useState('20')
-  const [step, setStep] = useState('15')
+  const [step, setStep] = useState('30')
   const [person, setPerson] = useState('')
   const [chosen, setChosen] = useState({})
   const [selectionMode, setSelectionMode] = useState(false)
@@ -57,6 +70,9 @@ function App() {
   const popoverRef = useRef(null)
   const dragRef = useRef(null)
   const [notice, setNotice] = useState('')
+  const [history, setHistory] = useState(readHistory)
+  const [existingLink, setExistingLink] = useState('')
+  const [importing, setImporting] = useState(false)
 
   useEffect(() => {
     const sync = () => {
@@ -151,6 +167,82 @@ function App() {
     }
   }, [inspectedSlot])
 
+  // Conserver un sondage uniquement après sa création ou une participation réussie.
+  // Ouvrir un simple lien ne l'ajoute pas à la liste personnelle.
+  function rememberPoll(poll, role) {
+    const previous = readHistory()
+    const existing = previous.find(item => item.id === poll.id)
+    const entry = {
+      id: poll.id,
+      title: poll.title,
+      created: Boolean(existing?.created || role === 'created'),
+      participated: Boolean(existing?.participated || role === 'participated'),
+      savedAt: Date.now()
+    }
+    const next = [entry, ...previous.filter(item => item.id !== poll.id)].slice(0, 100)
+    try {
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+      setHistory(next)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function openSavedPoll(id) {
+    window.history.pushState({}, '', linkFor(id))
+    setEventId(id)
+    setEvent(null)
+    setLoading(true)
+    setLoadError('')
+    setChosen({})
+    setCreating(false)
+    setInspectedSlot(null)
+    setSelectionMode(false)
+    setNotice('')
+    dragRef.current = null
+  }
+
+  function removeSavedPoll(id) {
+    const poll = history.find(item => item.id === id)
+    if (!poll) return
+    if (!window.confirm(`Retirer « ${poll.title} » de la liste sur cet appareil ? Le sondage en ligne restera accessible via son lien.`)) return
+    const next = readHistory().filter(item => item.id !== id)
+    try {
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+      setHistory(next)
+      setNotice('Sondage retiré de cet appareil. Il reste disponible en ligne.')
+    } catch {
+      setNotice('Impossible de modifier l’historique sur cet appareil. Vérifie les paramètres de stockage du navigateur.')
+    }
+  }
+
+  // Pour retrouver des sondages créés avant cette version, un lien peut être
+  // ajouté manuellement : impossible d'inférer l'ancien historique depuis Supabase.
+  async function addExistingPoll(e) {
+    e.preventDefault()
+    if (!db) return setNotice(configError)
+    const text = existingLink.trim()
+    let id = ''
+    try { id = new URL(text, window.location.origin).searchParams.get('id') || '' } catch { /* lien incorrect */ }
+    if (!id && /^[a-z0-9_-]{6,128}$/i.test(text)) id = text
+    if (!/^[a-z0-9_-]{6,128}$/i.test(id)) return setNotice('Colle un lien de sondage valide contenant ?id=…')
+    setImporting(true)
+    try {
+      const { data, error } = await db.from('events').select('data').eq('id', id).maybeSingle()
+      if (error) throw error
+      if (!data?.data) return setNotice('Ce sondage est introuvable dans Supabase.')
+      const stored = rememberPoll(data.data, 'saved')
+      if (!stored) return setNotice('Le navigateur n’autorise pas l’enregistrement local de l’historique.')
+      setExistingLink('')
+      setNotice('Sondage ajouté à ton historique local.')
+    } catch (error) {
+      setNotice(`Impossible d’ajouter ce sondage : ${error.message}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   function home() {
     window.history.pushState({}, '', import.meta.env.BASE_URL)
     setEventId(null)
@@ -166,8 +258,10 @@ function App() {
     e.preventDefault()
     if (!db) return setNotice(configError)
     if (!title.trim()) return setNotice('Ajoute un nom à ton sondage.')
+    const days = Number(dayCount)
+    if (!Number.isInteger(days) || days < 1 || days > 31) return setNotice('Indique un nombre de jours entier entre 1 et 31.')
     if (Number(endHour) <= Number(startHour)) return setNotice('L’heure de fin doit être après l’heure de début.')
-    const dates = Array.from({ length: Number(dayCount) }, (_, i) => {
+    const dates = Array.from({ length: days }, (_, i) => {
       const d = dateObj(startDate)
       d.setDate(d.getDate() + i)
       return dateISO(d)
@@ -185,7 +279,11 @@ function App() {
       setPerson('')
       setCreating(false)
       setEventId(ev.id)
-      setNotice('Sondage enregistré en ligne. Tu peux partager son lien !')
+      setLoading(true)
+      const stored = rememberPoll(ev, 'created')
+      setNotice(stored
+        ? 'Sondage enregistré en ligne et ajouté à ton historique local.'
+        : 'Sondage enregistré en ligne. Le navigateur n’autorise pas l’enregistrement de l’historique local.')
     } catch (error) {
       setNotice(`Création impossible dans Supabase : ${error.message}`)
     } finally {
@@ -295,7 +393,10 @@ function App() {
       setEvent(changed)
       setPerson('')
       setChosen({})
-      setNotice('Tes disponibilités ont bien été enregistrées en ligne.')
+      const stored = rememberPoll(current, 'participated')
+      setNotice(stored
+        ? 'Tes disponibilités ont été enregistrées et ce sondage figure dans ton historique.'
+        : 'Tes disponibilités sont en ligne, mais l’historique local n’a pas pu être enregistré.')
     } catch (error) {
       setNotice(`Enregistrement impossible : ${error.message}`)
     } finally {
@@ -324,22 +425,42 @@ function App() {
   }
 
   return <div className="shell">
-    <header><button className="logo" onClick={home}><span><CalendarDays /></span>QuandEstLibre</button><small>Simple. Ensemble.</small></header>
+    <header><button className="logo" onClick={home}><span><CalendarDays /></span>QuandEstLibre</button></header>
     {notice && <button className="notice" onClick={() => setNotice('')}><Check size={16} />{notice} ×</button>}
     {!eventId ? <main>
-      <section className="hero"><div className="eyebrow">ORGANISATION FACILE</div><h1>Trouvons un moment<br /><em>qui convient à tous.</em></h1><p>Crée un sondage, partage le lien et découvre quand tout le monde est disponible.</p>
+      <section className="hero"><h1>Mes sondages</h1><p>Crée un sondage ou retrouve ceux enregistrés sur cet appareil.</p>
         {!db && <div className="alert"><b>Application non connectée</b><p>{configError}</p></div>}
-        <button className="primary" disabled={!db} onClick={() => setCreating(true)}><Plus size={18} /> Créer un sondage</button><div className="noaccount">✓ Sans inscription</div>
+        <button className="primary" disabled={!db} onClick={() => setCreating(p => !p)}><Plus size={18} /> {creating ? 'Masquer le formulaire' : 'Créer un sondage'}</button>
       </section>
       {creating && <form className="panel form" onSubmit={create}><div className="paneltop"><h2>Nouveau sondage</h2><button type="button" onClick={() => setCreating(false)}>Fermer</button></div>
         <label>Nom de l'événement<input value={title} onChange={e => setTitle(e.target.value)} placeholder="Ex. : Réunion de l'équipe" required /></label>
-        <div className="twocol"><label>Premier jour<input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required /></label><label>Nombre de jours<select value={dayCount} onChange={e => setDayCount(e.target.value)}>{[3, 5, 7, 10, 14, 21].map(n => <option key={n}>{n}</option>)}</select></label></div>
+        <div className="twocol"><label>Premier jour<input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required /></label><label>Nombre de jours<input type="number" min="1" max="31" step="1" inputMode="numeric" value={dayCount} onChange={e => setDayCount(e.target.value)} required /></label></div>
         <div className="twocol"><label>Début<select value={startHour} onChange={e => setStartHour(e.target.value)}>{Array.from({ length: 24 }, (_, i) => pad(i)).map(t => <option key={t}>{t}</option>)}</select></label><label>Fin<select value={endHour} onChange={e => setEndHour(e.target.value)}>{Array.from({ length: 24 }, (_, i) => pad(i + 1)).map(t => <option key={t}>{t}</option>)}</select></label></div>
-        <label>Durée des créneaux<select value={step} onChange={e => setStep(e.target.value)}><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 heure</option></select></label>
+        <label>Durée des créneaux<select value={step} onChange={e => setStep(e.target.value)}><option value="30">30 minutes</option><option value="60">1 heure</option></select></label>
         <button className="primary full" disabled={saving}>{saving ? 'Enregistrement en ligne…' : 'Créer mon sondage'}</button>
       </form>}
-      <section className="features"><article><b>Un lien à partager</b><p>Les participants répondent sans créer de compte.</p></article><article><b>Le meilleur moment</b><p>Repère les horaires qui conviennent au plus grand nombre.</p></article><article><b>Conçu pour Android</b><p>Une grille tactile, lisible et facile à utiliser.</p></article></section>
-      <footer>QuandEstLibre · Trouvons un moment ensemble</footer>
+      <section className="panel history-panel" aria-labelledby="history-heading">
+        <div className="history-heading"><h2 id="history-heading">Sondages enregistrés ({history.length})</h2><small>Sur cet appareil uniquement</small></div>
+        {history.length === 0 ? <p className="hint">Aucun sondage dans ton historique. Les sondages que tu crées ou auxquels tu réponds apparaîtront ici.</p>
+          : <div className="history-list">{history.map(item => <article className="history-item" key={item.id}>
+              <div className="history-info"><b>{item.title}</b><div className="history-tags">
+                {item.created && <span>Créé</span>}{item.participated && <span>Participation</span>}{!item.created && !item.participated && <span>Ajouté par lien</span>}
+              </div></div>
+              <div className="history-actions">
+                <button type="button" className="open-poll" onClick={() => openSavedPoll(item.id)} aria-label={`Ouvrir ${item.title}`}><ArrowUpRight size={16} /> Ouvrir</button>
+                <button type="button" className="remove-poll" onClick={() => removeSavedPoll(item.id)} aria-label={`Retirer ${item.title} de cet appareil`} title="Retirer de cet appareil"><Trash2 size={16} /> Retirer</button>
+              </div>
+            </article>)}</div>}
+        <details className="history-import"><summary>Ajouter un ancien sondage par son lien</summary>
+          <form onSubmit={addExistingPoll} className="history-import-form">
+            <label htmlFor="history-url">Lien du sondage</label>
+            <input id="history-url" type="url" placeholder="https://…/?id=…" value={existingLink} onChange={e => setExistingLink(e.target.value)} required />
+            <button type="submit" disabled={importing || !db}>{importing ? 'Vérification…' : 'Ajouter'}</button>
+          </form>
+        </details>
+        <p className="history-footnote">Retirer un sondage ici ne le supprime pas de Supabase et n’affecte pas les autres participants. Cette liste disparaît si tu effaces les données de ce navigateur.</p>
+      </section>
+      <footer>QuandEstLibre</footer>
     </main> : loading ? <main className="statepanel"><h1>Chargement du sondage…</h1><p>Récupération des données depuis Supabase.</p></main> : loadError ? <main className="statepanel"><div className="alert"><h1>Impossible d’ouvrir ce sondage</h1><p>{loadError}</p><p>Identifiant du sondage : <code>{eventId}</code></p></div><button className="primary" onClick={() => setRetry(v => v + 1)}><RefreshCw size={16} /> Réessayer</button><button className="back" onClick={home}>Retour à l’accueil</button></main> : event ? <main className="event">
       <button className="back" onClick={home}><ChevronLeft size={17} /> Accueil</button>
       <div className="eventtitle"><div><div className="eyebrow">SONDAGE DE DISPONIBILITÉS</div><h1>{event.title}</h1><p>{event.dates.length} jours · Créneaux de {event.step} minutes</p></div><button className="share" onClick={share}><Share2 size={17} /> Partager</button></div>

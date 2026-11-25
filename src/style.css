@@ -38,13 +38,33 @@ main { max-width: 980px; margin: auto; padding: 44px 22px 20px; }
 .primary:hover:not(:disabled) { background: #37006d; }
 .primary.full { width: 100%; }
 .primary:disabled { cursor: not-allowed; opacity: .5; }
-.noaccount { font-size: 12px; color: #76687d; margin-top: 13px; }
-.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; border-top: 1px solid var(--border); padding: 25px 0; }
-.features article { background: white; border: 1px solid var(--border); border-radius: 13px; padding: 17px; }
-.features b { font-size: 14px; }
-.features p, .hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
 footer { text-align: center; color: #96899c; font-size: 11px; padding: 25px; }
 .panel { background: white; border: 1px solid var(--border); border-radius: 17px; padding: 22px; margin: 18px 0; box-shadow: 0 6px 26px #4c029707; }
+/* Historique local : sondages créés ou auxquels on a réellement répondu */
+.history-panel { margin-top: 14px; }
+.history-heading { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; }
+.history-heading h2 { margin-bottom: 12px; }
+.history-heading small, .history-footnote { font-size: 11px; color: var(--muted); }
+.history-list { display: grid; gap: 10px; }
+.history-item { border: 1px solid #e8dfee; border-radius: 12px; padding: 13px; display: flex; gap: 14px; align-items: center; justify-content: space-between; background: #fff; }
+.history-info { min-width: 0; overflow-wrap: anywhere; }
+.history-info b { color: var(--charcoal); font-size: 14px; }
+.history-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.history-tags span { border-radius: 100px; background: #f1e8fc; color: #4c0297; padding: 4px 9px; font-size: 10px; font-weight: 700; }
+.history-tags span + span { background: #ffedea; color: #a42b23; }
+.history-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.history-actions button { border-radius: 9px; padding: 10px 12px; display: inline-flex; gap: 6px; align-items: center; justify-content: center; font-size: 12px; font-weight: 750; }
+.open-poll { border: 1px solid var(--violet); background: var(--violet); color: white; }
+.remove-poll { border: 1px solid #ead8d5; background: white; color: #9c332b; }
+.history-footnote { line-height: 1.5; margin: 14px 0 0; }
+.history-import { margin: 16px 0 0; border-top: 1px solid #eee5f1; padding-top: 13px; }
+.history-import summary { color: var(--violet); font-weight: 750; font-size: 12px; cursor: pointer; }
+.history-import-form { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+.history-import-form label { width: 100%; font-size: 12px; color: var(--muted); }
+.history-import-form input { min-width: 180px; flex: 1; min-height: 42px; border: 1px solid #ded3e9; border-radius: 9px; padding: 0 10px; }
+.history-import-form button { border: 0; background: var(--violet); color: #fff; min-height: 42px; padding: 0 15px; border-radius: 9px; font-weight: 750; }
+.history-import-form button:disabled { opacity: .5; cursor: not-allowed; }
 .form { max-width: 550px; }
 .paneltop, .eventtitle { display: flex; justify-content: space-between; align-items: center; gap: 15px; }
 .paneltop h2, .panel h2 { font-size: 20px; margin: 0 0 15px; }
@@ -122,8 +142,9 @@ footer { text-align: center; color: #96899c; font-size: 11px; padding: 25px; }
   main { padding: 28px 15px 15px; }
   .hero { padding: 10px 0 25px; }
   .hero h1 { font-size: 39px; }
-  .features { grid-template-columns: 1fr; gap: 10px; padding: 18px 0; }
-  .features article { padding: 14px; }
+  .history-item { align-items: flex-start; flex-wrap: wrap; }
+  .history-actions { width: 100%; }
+  .history-actions button { flex: 1; }
   .panel { padding: 16px 12px; }
   .eventtitle { align-items: flex-start; }
   .share { font-size: 0; padding: 10px; }
