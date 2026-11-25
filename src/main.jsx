@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createClient } from '@supabase/supabase-js'
-import { CalendarDays, Plus, Share2, ChevronLeft, Check, Sparkles, Copy, RefreshCw, Users, X } from 'lucide-react'
+import { CalendarDays, Plus, Share2, ChevronLeft, Check, Sparkles, Copy, RefreshCw, Users, X, MousePointer2, PencilLine, Eye } from 'lucide-react'
 import './style.css'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
@@ -52,8 +52,9 @@ function App() {
   const [step, setStep] = useState('15')
   const [person, setPerson] = useState('')
   const [chosen, setChosen] = useState({})
-  const [dragEnabled, setDragEnabled] = useState(false)
+  const [selectionMode, setSelectionMode] = useState(false)
   const [inspectedSlot, setInspectedSlot] = useState(null)
+  const popoverRef = useRef(null)
   const dragRef = useRef(null)
   const [notice, setNotice] = useState('')
 
@@ -63,6 +64,7 @@ function App() {
       setEvent(null)
       setChosen({})
       setInspectedSlot(null)
+      setSelectionMode(false)
       dragRef.current = null
     }
     window.addEventListener('popstate', sync)
@@ -128,6 +130,27 @@ function App() {
     }
   }, [eventId, retry])
 
+  // La carte flottante se ferme au clic à l'extérieur, au défilement et avec Échap.
+  useEffect(() => {
+    if (!inspectedSlot) return
+    const outside = e => {
+      if (popoverRef.current?.contains(e.target) || e.target.closest?.('[data-slot]')) return
+      setInspectedSlot(null)
+    }
+    const escape = e => { if (e.key === 'Escape') setInspectedSlot(null) }
+    const dismiss = () => setInspectedSlot(null)
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', escape)
+    window.addEventListener('scroll', dismiss)
+    window.addEventListener('resize', dismiss)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', escape)
+      window.removeEventListener('scroll', dismiss)
+      window.removeEventListener('resize', dismiss)
+    }
+  }, [inspectedSlot])
+
   function home() {
     window.history.pushState({}, '', import.meta.env.BASE_URL)
     setEventId(null)
@@ -135,6 +158,7 @@ function App() {
     setEvent(null)
     setNotice('')
     setInspectedSlot(null)
+    setSelectionMode(false)
     dragRef.current = null
   }
 
@@ -157,6 +181,7 @@ function App() {
       window.history.pushState({}, '', linkFor(ev.id))
       setChosen({})
       setInspectedSlot(null)
+      setSelectionMode(false)
       setPerson('')
       setCreating(false)
       setEventId(ev.id)
@@ -184,16 +209,24 @@ function App() {
     return `${dateLabel(d)} à ${t}`
   }).join(' · ')
 
-  // Un clic en mode normal modifie ma sélection ET montre les participants disponibles.
-  function inspectAndToggle(k) {
-    setChosen(p => ({ ...p, [k]: !p[k] }))
-    setInspectedSlot(k)
+  // En mode consultation, ne PAS modifier les disponibilités : afficher une carte
+  // à côté de la case. La carte est fixe pour ne pas être coupée par la grille défilante.
+  function inspectSlot(k, target) {
+    const rect = target.getBoundingClientRect()
+    const width = Math.min(320, window.innerWidth - 24)
+    const left = Math.max(12, Math.min(rect.left + rect.width / 2 - width / 2, window.innerWidth - width - 12))
+    const n = (event?.participants || []).filter(p => Array.isArray(p.slots) && p.slots.includes(k)).length
+    const estimatedHeight = Math.min(340, 169 + Math.ceil(n / 2) * 37)
+    const below = window.innerHeight - rect.bottom
+    const preferredTop = below > estimatedHeight + 12 ? rect.bottom + 10 : rect.top - estimatedHeight - 10
+    const top = Math.max(12, Math.min(preferredTop, window.innerHeight - Math.min(estimatedHeight, window.innerHeight - 24) - 12))
+    setInspectedSlot({ key: k, left, top, width })
   }
 
   // Le tracé sélectionne (ou désélectionne) toutes les cases traversées.
   // Le premier créneau détermine le sens, comme dans When2Meet.
   function onGridPointerDown(e) {
-    if (!dragEnabled || (e.pointerType === 'mouse' && e.button !== 0)) return
+    if (!selectionMode || (e.pointerType === 'mouse' && e.button !== 0)) return
     const cell = e.target.closest('[data-slot]')
     if (!cell || !e.currentTarget.contains(cell)) return
     const key = cell.dataset.slot
@@ -209,7 +242,7 @@ function App() {
 
   function onGridPointerMove(e) {
     const drag = dragRef.current
-    if (!dragEnabled || !drag || drag.pointerId !== e.pointerId) return
+    if (!selectionMode || !drag || drag.pointerId !== e.pointerId) return
     const grid = e.currentTarget
     const x0 = drag.last.x, y0 = drag.last.y
     const dx = e.clientX - x0, dy = e.clientY - y0
@@ -242,7 +275,7 @@ function App() {
   }
 
   const slotParticipants = inspectedSlot
-    ? (event?.participants || []).filter(p => Array.isArray(p.slots) && p.slots.includes(inspectedSlot))
+    ? (event?.participants || []).filter(p => Array.isArray(p.slots) && p.slots.includes(inspectedSlot.key))
     : []
 
   async function submit() {
@@ -314,22 +347,22 @@ function App() {
       <section className="panel"><h2>Mes disponibilités</h2>
         <p className="hint">Saisis ton prénom, sélectionne les créneaux qui te conviennent, puis enregistre ta réponse.</p>
         <label>Ton prénom<input value={person} onChange={e => setPerson(e.target.value)} placeholder="Ex. : Camille" /></label>
-        <div className="mode-row">
-          <label className="mode-toggle">
-            <input type="checkbox" role="switch" checked={dragEnabled} onChange={e => {
-              setDragEnabled(e.target.checked)
-              dragRef.current = null
-              if (e.target.checked) setInspectedSlot(null)
-            }} />
-            <span className="mode-switch" aria-hidden="true" />
-            <span className="mode-copy"><b>Sélection par glissement</b><small>Avec le doigt ou la souris</small></span>
-          </label>
-          <span className={`mode-status ${dragEnabled ? 'on' : ''}`}>{dragEnabled ? 'Activé' : 'Désactivé'}</span>
+        <div className={`mode-row ${selectionMode ? 'mode-selecting' : ''}`}>
+          <div className="mode-description">
+            <div className="mode-symbol">{selectionMode ? <PencilLine size={19} /> : <Eye size={19} />}</div>
+            <div><b>{selectionMode ? 'Mode sélection actif' : 'Mode consultation'}</b>
+              <small>{selectionMode ? 'Clique ou glisse pour cocher tes créneaux.' : 'Touche un créneau pour découvrir les personnes disponibles.'}</small></div>
+          </div>
+          <button type="button" className={`selection-button ${selectionMode ? 'is-active' : ''}`}
+            aria-pressed={selectionMode}
+            onClick={() => { setSelectionMode(p => !p); setInspectedSlot(null); dragRef.current = null }}>
+            {selectionMode ? <><Check size={17} /> Terminer la sélection</> : <><MousePointer2 size={17} /> Commencer la sélection</>}
+          </button>
         </div>
-        <p className="mode-help">{dragEnabled
-          ? 'Fais glisser le doigt ou maintiens le clic de la souris pour cocher plusieurs cases. Un nouveau glissement sur une case cochée permet de décocher. Désactive ce mode pour voir les noms ou faire défiler la grille au doigt.'
-          : 'Touche une case pour la cocher ou la décocher et afficher les personnes déjà disponibles à cet horaire. Tu peux faire défiler la grille.'}</p>
-        <div className={`gridwrap ${dragEnabled ? 'drag-active' : ''}`}>
+        <p className="mode-help">{selectionMode
+          ? 'Glisse le doigt ou la souris sur les créneaux, ou touche-les un par un. Termine la sélection pour revenir à la consultation.'
+          : 'Les cases sont en lecture seule : touche une case pour voir les prénoms dans une fenêtre flottante. Pour indiquer tes disponibilités, appuie sur « Commencer la sélection ».'}</p>
+        <div className={`gridwrap ${selectionMode ? 'drag-active' : ''}`} onScroll={() => setInspectedSlot(null)}>
           <div className="grid" style={{ '--days': event.dates.length }}
             onPointerDown={onGridPointerDown}
             onPointerMove={onGridPointerMove}
@@ -340,29 +373,31 @@ function App() {
             {times.map(t => <React.Fragment key={t}><div className="time">{t}</div>{event.dates.map(d => {
               const k = keyFor(d, t)
               return <button key={k} type="button" data-slot={k}
-                className={`cell ${chosen[k] ? 'mine' : ''} ${counts[k] ? 'voted' : ''} ${inspectedSlot === k && !dragEnabled ? 'inspected' : ''}`}
+                className={`cell ${chosen[k] ? 'mine' : ''} ${counts[k] ? 'voted' : ''} ${inspectedSlot?.key === k && !selectionMode ? 'inspected' : ''}`}
                 onClick={e => {
-                  if (!dragEnabled) inspectAndToggle(k)
+                  if (!selectionMode) inspectSlot(k, e.currentTarget)
                   else if (e.detail === 0) setChosen(p => ({ ...p, [k]: !p[k] })) // clavier
                 }}
-                aria-pressed={Boolean(chosen[k])}
+                aria-pressed={selectionMode ? Boolean(chosen[k]) : undefined}
                 aria-label={`${dateLabel(d)} à ${t} : ${counts[k] || 0} personne(s) disponible(s)${chosen[k] ? ', sélectionné' : ''}`}>
                 {counts[k] || ''}
               </button>
             })}</React.Fragment>)}
           </div>
         </div>
-        {!dragEnabled && inspectedSlot && <aside className="slot-details" aria-live="polite">
+        {!selectionMode && inspectedSlot && <aside ref={popoverRef} className="slot-popover"
+          role="dialog" aria-modal="false" aria-label="Personnes disponibles pour le créneau"
+          style={{ left: inspectedSlot.left, top: inspectedSlot.top, width: inspectedSlot.width }}>
           <div className="slot-details-top">
-            <div><span className="slot-eyebrow"><Users size={15} /> Disponibles pour ce créneau</span>
-              <h3>{dateLabel(inspectedSlot.split('|')[0])} à {inspectedSlot.split('|')[1]}</h3></div>
-            <button type="button" className="close-details" onClick={() => setInspectedSlot(null)} aria-label="Fermer les détails"><X size={18} /></button>
+            <div><span className="slot-eyebrow"><Users size={14} /> Disponibilités</span>
+              <h3>{dateLabel(inspectedSlot.key.split('|')[0])} à {inspectedSlot.key.split('|')[1]}</h3></div>
+            <button type="button" className="close-details" onClick={() => setInspectedSlot(null)} aria-label="Fermer"><X size={17} /></button>
           </div>
-          <p className="slot-count">{slotParticipants.length} {slotParticipants.length > 1 ? 'participants disponibles' : 'participant disponible'}</p>
+          <p className="slot-count">{slotParticipants.length} {slotParticipants.length > 1 ? 'personnes disponibles' : 'personne disponible'}</p>
           {slotParticipants.length ? <div className="slot-names">{slotParticipants.map((p,i) =>
             <span className="slot-name" key={`${p.id || p.name}-${i}`}>{p.name}</span>)}</div>
-            : <p className="slot-empty">Personne n'a encore enregistré sa disponibilité pour ce créneau.</p>}
-          <p className="slot-explain">Ta propre sélection apparaît en vert dans la grille ; elle ne sera visible par les autres qu'après l'enregistrement.</p>
+            : <p className="slot-empty">Personne n'a encore indiqué être disponible à ce créneau.</p>}
+          <p className="slot-explain">Pour indiquer ta disponibilité, utilise le bouton « Commencer la sélection ».</p>
         </aside>}
         <div className="legend"><span><i /> Ta sélection</span><span><i className="other" /> Déjà sélectionné par quelqu'un</span><span>Les chiffres indiquent le nombre de personnes</span></div>
         <button className="primary full" disabled={saving} onClick={submit}><Check size={17} /> {saving ? 'Enregistrement…' : 'Enregistrer mes disponibilités'}</button>
