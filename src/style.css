@@ -159,3 +159,17 @@ footer { text-align: center; color: #96899c; font-size: 11px; padding: 25px; }
   .mode-description { width: 100%; }
   .notice { top: 72px; }
 }
+
+/* v1.4 : retrouver et mettre à jour une réponse sans créer de doublon */
+.response-banner { display: flex; align-items: flex-start; gap: 9px; background: #f1e8fc; border: 1px solid #d5b9ef; padding: 11px 12px; border-radius: 10px; color: var(--violet); font-size: 12px; line-height: 1.5; }
+.response-banner svg { flex: 0 0 17px; margin-top: 1px; }
+.existing-name { border: 1px solid #ecc59a; background: #fff8ee; border-radius: 10px; padding: 12px 14px; margin: 10px 0 16px; }
+.existing-name b { font-size: 13px; color: #703b16; }
+.existing-name p, .existing-name small { color: #755c49; font-size: 12px; line-height: 1.5; }
+.existing-name small { display: block; margin-top: 10px; font-size: 11px; }
+.existing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.existing-actions button { min-height: 40px; display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px; border: 1px solid var(--violet); border-radius: 9px; background: white; color: var(--violet); font-weight: 750; font-size: 12px; }
+.existing-actions button:hover { background: var(--violet-light); }
+.response-banner { flex-wrap: wrap; }
+.another-participant { border: 1px solid #c9a5ef; border-radius: 8px; background: white; color: var(--violet); padding: 8px 10px; font-size: 11px; font-weight: 700; }
+.another-participant:hover { background: #faf6ff; }

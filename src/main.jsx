@@ -35,6 +35,31 @@ const slotsFor = (start, end, step) => {
   return a
 }
 const keyFor = (d, t) => `${d}|${t}`
+// Un même prénom (espaces, casse et accents ignorés) ne doit pas créer deux participants.
+const cleanName = name => String(name || '').trim().replace(/\s+/g, ' ')
+const nameKey = name => cleanName(name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('fr-FR')
+
+// Repère la réponse de cet appareil, sans compte utilisateur ni authentification.
+const MY_RESPONSES_KEY = 'quandestlibre_my_responses_v1'
+function localResponseId(pollId) {
+  try { return JSON.parse(localStorage.getItem(MY_RESPONSES_KEY) || '{}')[pollId] || null }
+  catch { return null }
+}
+function saveLocalResponseId(pollId, participantId) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MY_RESPONSES_KEY) || '{}')
+    saved[pollId] = participantId
+    localStorage.setItem(MY_RESPONSES_KEY, JSON.stringify(saved))
+    return true
+  } catch { return false }
+}
+function removeLocalResponseId(pollId) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MY_RESPONSES_KEY) || '{}')
+    delete saved[pollId]
+    localStorage.setItem(MY_RESPONSES_KEY, JSON.stringify(saved))
+  } catch { /* Stockage local parfois indisponible */ }
+}
 
 // Historique propre à ce navigateur : aucun compte et aucune table Supabase supplémentaire.
 const HISTORY_KEY = 'quandestlibre_history_v1'
@@ -65,6 +90,8 @@ function App() {
   const [step, setStep] = useState('30')
   const [person, setPerson] = useState('')
   const [chosen, setChosen] = useState({})
+  const [editingId, setEditingId] = useState(null)
+  const loadedResponseForRef = useRef(null)
   const [selectionMode, setSelectionMode] = useState(false)
   const [inspectedSlot, setInspectedSlot] = useState(null)
   const popoverRef = useRef(null)
@@ -79,6 +106,9 @@ function App() {
       setEventId(getEventId())
       setEvent(null)
       setChosen({})
+      setPerson('')
+      setEditingId(null)
+      loadedResponseForRef.current = null
       setInspectedSlot(null)
       setSelectionMode(false)
       dragRef.current = null
@@ -146,6 +176,24 @@ function App() {
     }
   }, [eventId, retry])
 
+  // Charger une seule fois les disponibilités de cet appareil lors de l'ouverture du sondage.
+  // Important : ne pas les réinitialiser à chaque actualisation distante (12 secondes).
+  useEffect(() => {
+    if (!event?.id || loadedResponseForRef.current === event.id) return
+    loadedResponseForRef.current = event.id
+    const id = localResponseId(event.id)
+    const existing = (event.participants || []).find(p => p.id === id)
+    if (existing) {
+      setPerson(existing.name)
+      setChosen(Object.fromEntries((existing.slots || []).map(k => [k, true])))
+      setEditingId(existing.id)
+    } else {
+      setEditingId(null)
+      setPerson('')
+      setChosen({})
+    }
+  }, [event])
+
   // La carte flottante se ferme au clic à l'extérieur, au défilement et avec Échap.
   useEffect(() => {
     if (!inspectedSlot) return
@@ -196,6 +244,9 @@ function App() {
     setLoading(true)
     setLoadError('')
     setChosen({})
+    setPerson('')
+    setEditingId(null)
+    loadedResponseForRef.current = null
     setCreating(false)
     setInspectedSlot(null)
     setSelectionMode(false)
@@ -208,6 +259,7 @@ function App() {
     if (!poll) return
     if (!window.confirm(`Retirer « ${poll.title} » de la liste sur cet appareil ? Le sondage en ligne restera accessible via son lien.`)) return
     const next = readHistory().filter(item => item.id !== id)
+    removeLocalResponseId(id)
     try {
       window.localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
       setHistory(next)
@@ -248,6 +300,10 @@ function App() {
     setEventId(null)
     setCreating(false)
     setEvent(null)
+    setPerson('')
+    setChosen({})
+    setEditingId(null)
+    loadedResponseForRef.current = null
     setNotice('')
     setInspectedSlot(null)
     setSelectionMode(false)
@@ -274,6 +330,8 @@ function App() {
       // Ne proposer le lien qu'une fois le sondage confirmé dans Supabase.
       window.history.pushState({}, '', linkFor(ev.id))
       setChosen({})
+      setEditingId(null)
+      loadedResponseForRef.current = null
       setInspectedSlot(null)
       setSelectionMode(false)
       setPerson('')
@@ -376,27 +434,75 @@ function App() {
     ? (event?.participants || []).filter(p => Array.isArray(p.slots) && p.slots.includes(inspectedSlot.key))
     : []
 
+  const sameName = event && cleanName(person)
+    ? (event.participants || []).filter(p => p.id !== editingId && nameKey(p.name) === nameKey(person))
+    : []
+  const currentParticipant = (event?.participants || []).find(p => p.id === editingId)
+
+  function resumeResponse(participant) {
+    if (!event) return
+    const confirmed = window.confirm(
+      `Reprendre la réponse de « ${participant.name} » ?\n\n` +
+      'Fais-le uniquement s’il s’agit de ta propre réponse. Cette application sans compte ne vérifie pas l’identité des participants.'
+    )
+    if (!confirmed) return
+    setPerson(participant.name)
+    setChosen(Object.fromEntries((participant.slots || []).map(k => [k, true])))
+    setEditingId(participant.id)
+    setSelectionMode(true)
+    setInspectedSlot(null)
+    saveLocalResponseId(event.id, participant.id)
+    setNotice('Réponse chargée. Modifie tes créneaux, puis appuie sur « Mettre à jour mes disponibilités ».')
+  }
+
   async function submit() {
     if (!db || !event) return setNotice('Ce sondage n’est pas connecté à Supabase.')
-    if (!person.trim()) return setNotice('Saisis ton prénom.')
+    const displayName = cleanName(person)
+    if (!displayName) return setNotice('Saisis ton prénom.')
     const selected = Object.keys(chosen).filter(k => chosen[k])
-    if (!selected.length) return setNotice('Sélectionne au moins un créneau.')
+    if (!selected.length && !editingId) return setNotice('Sélectionne au moins un créneau.')
+    if (sameName.length) return setNotice('Ce prénom est déjà utilisé. Si c’est ta réponse, utilise « Reprendre cette réponse » ; sinon, choisis un prénom distinct.')
     setSaving(true)
+    const newParticipantId = editingId || newId()
     try {
-      const { data, error: readError } = await db.from('events').select('data').eq('id', event.id).single()
-      if (readError) throw readError
-      const current = data.data
-      const p = { id: newId(), name: person.trim(), slots: selected }
-      const changed = { ...current, participants: [...(current.participants || []), p] }
-      const { error: writeError } = await db.from('events').update({ data: changed, updated_at: new Date().toISOString() }).eq('id', event.id)
-      if (writeError) throw writeError
+      let changed = null
+      // Évite d'écraser une participation arrivée juste avant la sauvegarde.
+      // Une mise à jour concurrente échoue avec 0 ligne et déclenche une nouvelle lecture.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: row, error: readError } = await db.from('events')
+          .select('data, updated_at').eq('id', event.id).single()
+        if (readError) throw readError
+        const current = row.data
+        const people = Array.isArray(current.participants) ? current.participants : []
+        const own = people.find(p => p.id === editingId)
+        if (editingId && !own) throw new Error('Ta réponse n’existe plus dans ce sondage. Actualise la page.')
+        if (people.some(p => p.id !== editingId && nameKey(p.name) === nameKey(displayName))) {
+          throw new Error('Ce prénom est déjà utilisé dans ce sondage. Choisis un prénom distinct, ou reprends ta propre réponse.')
+        }
+        const participant = { ...(own || {}), id: newParticipantId, name: displayName, slots: selected }
+        const updatedPeople = editingId
+          ? people.map(p => p.id === editingId ? participant : p)
+          : [...people, participant]
+        const proposal = { ...current, participants: updatedPeople }
+        const { data: accepted, error: writeError } = await db.from('events')
+          .update({ data: proposal, updated_at: new Date().toISOString() })
+          .eq('id', event.id).eq('updated_at', row.updated_at).select('id').maybeSingle()
+        if (writeError) throw writeError
+        if (accepted) { changed = proposal; break }
+      }
+      if (!changed) throw new Error('Des modifications simultanées ont eu lieu. Réessaie dans un instant.')
       setEvent(changed)
-      setPerson('')
-      setChosen({})
-      const stored = rememberPoll(current, 'participated')
-      setNotice(stored
-        ? 'Tes disponibilités ont été enregistrées et ce sondage figure dans ton historique.'
-        : 'Tes disponibilités sont en ligne, mais l’historique local n’a pas pu être enregistré.')
+      setEditingId(newParticipantId)
+      setPerson(displayName)
+      setSelectionMode(false)
+      setInspectedSlot(null)
+      const stored = rememberPoll(changed, 'participated')
+      const linked = saveLocalResponseId(event.id, newParticipantId)
+      setNotice(editingId
+        ? 'Tes disponibilités ont été mises à jour. Ton ancienne réponse a été remplacée.'
+        : (stored && linked
+          ? 'Tes disponibilités ont été enregistrées. Tu pourras les modifier depuis cet appareil.'
+          : 'Réponse enregistrée en ligne. Le stockage local est indisponible : conserve ce lien pour retrouver le sondage.'))
     } catch (error) {
       setNotice(`Enregistrement impossible : ${error.message}`)
     } finally {
@@ -466,8 +572,27 @@ function App() {
       <div className="eventtitle"><div><div className="eyebrow">SONDAGE DE DISPONIBILITÉS</div><h1>{event.title}</h1><p>{event.dates.length} jours · Créneaux de {event.step} minutes</p></div><button className="share" onClick={share}><Share2 size={17} /> Partager</button></div>
       <section className="best"><Sparkles /><div><small>MEILLEUR CRÉNEAU ACTUEL</small><b>{max ? fmtBest : 'En attente de réponses'}</b><span>{max ? `${max} personne(s) disponible(s)` : 'Les réponses apparaîtront ici.'}</span></div></section>
       <section className="panel"><h2>Mes disponibilités</h2>
-        <p className="hint">Saisis ton prénom, sélectionne les créneaux qui te conviennent, puis enregistre ta réponse.</p>
-        <label>Ton prénom<input value={person} onChange={e => setPerson(e.target.value)} placeholder="Ex. : Camille" /></label>
+        <p className="hint">Saisis ton prénom puis sélectionne tes créneaux. Tu peux revenir modifier une réponse déjà enregistrée.</p>
+        <label>Ton prénom<input value={person} onChange={e => setPerson(e.target.value)} placeholder="Ex. : Camille" autoComplete="given-name" /></label>
+        {currentParticipant && <div className="response-banner" role="status"><Check size={17} />
+          <span>Tu modifies la réponse de <strong>{currentParticipant.name}</strong>. Tes créneaux enregistrés sont affichés en violet.</span>
+          <button type="button" className="another-participant" onClick={() => {
+            setEditingId(null)
+            setPerson('')
+            setChosen({})
+            setSelectionMode(false)
+            setInspectedSlot(null)
+          }}>Répondre pour une autre personne</button>
+        </div>}
+        {sameName.length > 0 && <div className="existing-name" role="status">
+          <b>Ce prénom figure déjà dans le sondage.</b>
+          <p>Pour éviter les doublons, tu ne peux pas créer une deuxième réponse avec ce prénom. Si c’est ta réponse, récupère-la ici :</p>
+          <div className="existing-actions">{sameName.map((p, index) => <button type="button" key={p.id || index}
+            onClick={() => resumeResponse(p)}>
+            <PencilLine size={15} /> Reprendre cette réponse{sameName.length > 1 ? ` (${index + 1}, ${p.slots?.length || 0} créneaux)` : ''}
+          </button>)}</div>
+          <small>Sans compte utilisateur, cette reprise par prénom ne constitue pas une vérification d’identité.</small>
+        </div>}
         <div className={`mode-row ${selectionMode ? 'mode-selecting' : ''}`}>
           <div className="mode-description">
             <div className="mode-symbol">{selectionMode ? <PencilLine size={19} /> : <Eye size={19} />}</div>
@@ -521,7 +646,8 @@ function App() {
           <p className="slot-explain">Pour indiquer ta disponibilité, utilise le bouton « Commencer la sélection ».</p>
         </aside>}
         <div className="legend"><span><i /> Ta sélection</span><span><i className="other" /> Déjà sélectionné par quelqu'un</span><span>Les chiffres indiquent le nombre de personnes</span></div>
-        <button className="primary full" disabled={saving} onClick={submit}><Check size={17} /> {saving ? 'Enregistrement…' : 'Enregistrer mes disponibilités'}</button>
+        <button className="primary full" disabled={saving || sameName.length > 0} onClick={submit}><Check size={17} /> {saving ? 'Enregistrement…' : editingId ? 'Mettre à jour mes disponibilités' : 'Enregistrer mes disponibilités'}</button>
+        {editingId && <p className="hint">Tu peux décocher tous les créneaux si tu n’es plus disponible ; les changements seront enregistrés en remplaçant ta précédente réponse.</p>}
       </section>
       <section className="panel"><h2>Disponibilités du groupe ({(event.participants || []).length})</h2>{(event.participants || []).length === 0 ? <p className="hint">Pas encore de réponse. Partage le lien pour inviter les participants.</p> : event.participants.map(p => <div className="participant" key={p.id}><b>{p.name}</b><span>{p.slots.length} créneaux</span></div>)}</section>
       <button className="copylink" onClick={copyLink}><Copy size={16} /> Copier le lien du sondage</button>
